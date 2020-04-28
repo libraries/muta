@@ -1,9 +1,10 @@
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use bincode::serialize;
 use futures::{future::try_join_all, TryFutureExt};
-use log::warn;
+use log::{info, warn};
 use overlord::types::{AggregatedVote, SignedChoke, SignedProposal, SignedVote};
 use overlord::Codec;
 use rlp::Encodable;
@@ -284,13 +285,19 @@ impl<R: Rpc + 'static, S: Storage + 'static> MessageHandler for PullTxsRpcHandle
     type Message = PullTxsRequest;
 
     async fn process(&self, ctx: Context, msg: PullTxsRequest) {
+        let now = SystemTime::now();
+        let len = msg.inner.len();
         let futs = msg
             .inner
             .into_iter()
             .map(|tx_hash| self.storage.get_transaction_by_hash(tx_hash))
             .collect::<Vec<_>>();
         let ret = try_join_all(futs).await.map(FixedSignedTxs::new);
-
+        info!(
+            "get {} txs from rocksdb, cost {} ms",
+            len,
+            now.elapsed().unwrap().as_millis()
+        );
         self.rpc
             .response(ctx, RPC_RESP_SYNC_PULL_TXS, ret, Priority::High)
             .unwrap_or_else(move |e: ProtocolError| warn!("[core_consensus] push txs {}", e))
