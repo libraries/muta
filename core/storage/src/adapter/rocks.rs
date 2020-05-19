@@ -1,8 +1,13 @@
+use std::cell::RefCell;
 use std::error::Error;
 use std::path::Path;
+use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use async_trait::async_trait;
+use byteorder::{BigEndian, ByteOrder};
 use derive_more::{Display, From};
 use rocksdb::{BlockBasedOptions, ColumnFamily, Options, WriteBatch, DB};
 
@@ -51,7 +56,9 @@ impl Config {
 
 #[derive(Debug)]
 pub struct RocksAdapter {
-    db: Arc<DB>,
+    pub db: Arc<DB>,
+    i:  AtomicU32,
+    g:  AtomicU32,
 }
 
 impl RocksAdapter {
@@ -68,7 +75,11 @@ impl RocksAdapter {
 
         let db = DB::open_cf(&opts, path, categories.iter()).map_err(RocksAdapterError::from)?;
 
-        Ok(RocksAdapter { db: Arc::new(db) })
+        Ok(RocksAdapter {
+            db: Arc::new(db),
+            i:  AtomicU32::new(0),
+            g:  AtomicU32::new(0),
+        })
     }
 }
 
@@ -105,12 +116,31 @@ impl StorageAdapter for RocksAdapter {
         let column = get_column::<S>(&self.db)?;
         let key = key.encode().await?;
 
-        let opt_bytes =
-            { db!(self.db, get_cf, column, key)?.map(|db_vec| Bytes::from(db_vec.to_vec())) };
+        let mut buf = [0; 4];
+        BigEndian::write_u32(&mut buf, self.g.load(Ordering::SeqCst));
+        let mut real_key: Vec<u8> = Vec::new();
+        if self.g.load(Ordering::SeqCst) < 5000 {
+            real_key.push(98);
+        } else {
+            real_key.push(97);
+        }
+        for i in 0..4 {
+            real_key.push(buf[i]);
+        }
+        let k: &[u8] = &key[..];
+        for i in 0..k.len() {
+            real_key.push(k[i]);
+        }
+
+        let opt_bytes = {
+            db!(self.db, get_cf, column, Bytes::from(real_key))?
+                .map(|db_vec| Bytes::from(db_vec.to_vec()))
+        };
+
+        self.g.fetch_add(1, Ordering::SeqCst);
 
         if let Some(bytes) = opt_bytes {
             let val = <_>::decode(bytes).await?;
-
             Ok(Some(val))
         } else {
             Ok(None)
@@ -152,6 +182,7 @@ impl StorageAdapter for RocksAdapter {
         let column = get_column::<S>(&self.db)?;
         let mut pairs: Vec<(Bytes, Option<Bytes>)> = Vec::with_capacity(keys.len());
 
+        let mut prefix_with_b = 0;
         for (mut key, value) in keys.into_iter().zip(vals.into_iter()) {
             let key = key.encode().await?;
 
@@ -160,8 +191,27 @@ impl StorageAdapter for RocksAdapter {
                 StorageBatchModify::Remove => None,
             };
 
-            pairs.push((key, value))
+            let mut buf = [0; 4];
+            BigEndian::write_u32(&mut buf, self.i.load(Ordering::SeqCst));
+            let mut real_key: Vec<u8> = Vec::new();
+            if self.i.load(Ordering::SeqCst) < 5000 {
+                prefix_with_b += 1;
+                real_key.push(98);
+            } else {
+                real_key.push(97);
+            }
+            for i in 0..4 {
+                real_key.push(buf[i]);
+            }
+            let k: &[u8] = &key[..];
+            for i in 0..k.len() {
+                real_key.push(k[i]);
+            }
+            self.i.fetch_add(1, Ordering::SeqCst);
+
+            pairs.push((Bytes::from(real_key), value))
         }
+        println!("prefix_with_b {:?}", prefix_with_b);
 
         let mut batch = WriteBatch::default();
         for (key, value) in pairs.into_iter() {

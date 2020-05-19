@@ -105,11 +105,10 @@ fn test_storage_wal_insert() {
 }
 
 #[test]
-#[ignore]
 fn test_storage_stat() {
     fs::remove_dir_all("rocksdb/test_adapter_stat").unwrap();
     let adapter = Arc::new(
-        RocksAdapter::new("rocksdb/test_adapter_stat".to_string(), Config::suggest()).unwrap(),
+        RocksAdapter::new("rocksdb/test_adapter_stat".to_string(), Config::default()).unwrap(),
     );
     let storage = Arc::new(ImplStorage::new(Arc::clone(&adapter)));
 
@@ -149,23 +148,50 @@ fn test_storage_stat() {
     }
 
     let now_head = SystemTime::now();
-    exec!(storage.get_transactions(head_5000_hashes.to_vec()));
+    let r = exec!(storage.get_transactions(head_5000_hashes.to_vec()));
     println!(
-        "get head 5000 tx spent {:?}ms",
+        "get head {:?} tx spent {:?}ms", r.len(),
         now_head.elapsed().unwrap().as_millis()
     );
 
-    let now_tail = SystemTime::now();
-    exec!(storage.get_transactions(tail_5000_hashes.to_vec()));
+    let column = adapter.db.cf_handle("c2").unwrap();
+    let mut iter = adapter.db.raw_iterator_cf(column).unwrap();
+    let mut collect= vec![];
+    let now_scan = SystemTime::now();
+
+    iter.seek(b"b");
+    while iter.valid() {
+        collect.push(iter.key());
+        iter.next();
+    }
     println!(
-        "get tail 5000 tx spent {:?}ms",
-        now_tail.elapsed().unwrap().as_millis()
+        "scan {:?} tx spent {:?}ms", collect.len(),
+        now_scan.elapsed().unwrap().as_millis()
     );
 
-    let now_rand = SystemTime::now();
-    exec!(storage.get_transactions(rand_5000_hashes.to_vec()));
-    println!(
-        "get rand 5000 tx spent {:?}ms",
-        now_rand.elapsed().unwrap().as_millis()
-    );
+    // let column = adapter.db.cf_handle("c2").unwrap();
+    // let iter = adapter.db.iterator_cf(column, rocksdb::IteratorMode::From(b"aaaa", rocksdb::Direction::Forward) ).unwrap();
+    // let mut collect= vec![];
+    // let now_scan = SystemTime::now();
+    // for (key, value) in iter {
+    //     collect.push(key);
+    // }
+    // println!(
+    //     "scan {:?} tx spent {:?}ms", collect.len(),
+    //     now_scan.elapsed().unwrap().as_millis()
+    // );
+
+    // let now_tail = SystemTime::now();
+    // exec!(storage.get_transactions(tail_5000_hashes.to_vec()));
+    // println!(
+    //     "get tail 5000 tx spent {:?}ms",
+    //     now_tail.elapsed().unwrap().as_millis()
+    // );
+
+    // let now_rand = SystemTime::now();
+    // exec!(storage.get_transactions(rand_5000_hashes.to_vec()));
+    // println!(
+    //     "get rand 5000 tx spent {:?}ms",
+    //     now_rand.elapsed().unwrap().as_millis()
+    // );
 }

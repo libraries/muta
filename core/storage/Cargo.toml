@@ -17,6 +17,8 @@ parking_lot = "0.10"
 async-trait = "0.1"
 rocksdb = "0.12"
 tokio = { version = "0.2", features = [ "sync" ] }
+byteorder = "*"
+bytes = "*"
 
 [dev-dependencies]
 num-traits = "0.2"
