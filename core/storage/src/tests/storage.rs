@@ -2,6 +2,8 @@ use std::fs;
 use std::sync::Arc;
 use std::time::SystemTime;
 
+use byteorder::{BigEndian, ByteOrder};
+use protocol::codec::ProtocolCodec;
 use protocol::fixed_codec::FixedCodec;
 use protocol::traits::Storage;
 use protocol::types::Hash;
@@ -110,68 +112,115 @@ fn test_storage_stat() {
     let adapter = Arc::new(
         RocksAdapter::new("rocksdb/test_adapter_stat".to_string(), Config::default()).unwrap(),
     );
-    let storage = Arc::new(ImplStorage::new(Arc::clone(&adapter)));
+    let column = adapter.db.cf_handle("c2").unwrap();
+    for i in 0..100000 {
+        let height = i / 12000;
+        let block_index = i % 12000;
 
-    let loop_num = 10;
-    let size = 1_000_000;
-    let rand_size = 500; // 500 * 10 = 5000
-
-    let mut head_5000_hashes = Vec::new();
-    let mut tail_5000_hashes = Vec::new();
-    let mut rand_5000_hashes = Vec::new();
-
-    for i in 0..loop_num {
-        let mut transactions = Vec::new();
-        let mut hashes = Vec::new();
-
-        for _ in 0..size {
-            let tx_hash = Hash::digest(get_random_bytes(10));
-            hashes.push(tx_hash.clone());
-            let transaction = mock_signed_tx(tx_hash.clone());
-            transactions.push(transaction);
+        let mut buf = [0; 4];
+        let mut real_key: Vec<u8> = Vec::new();
+        real_key.push(97);
+        BigEndian::write_u32(&mut buf, height);
+        for i in 0..4 {
+            real_key.push(buf[i]);
         }
-        if i == 0 {
-            head_5000_hashes = hashes[0..5000].to_vec();
+        BigEndian::write_u32(&mut buf, block_index);
+        for i in 0..4 {
+            real_key.push(buf[i]);
         }
-        if i == loop_num - 1 {
-            tail_5000_hashes = hashes[size - 5000..size].to_vec();
+        let tx_hash = Hash::digest(get_random_bytes(10));
+        let k: &[u8] = &tx_hash.as_bytes()[..];
+        for i in 0..k.len() {
+            real_key.push(k[i]);
         }
-        rand_5000_hashes.extend_from_slice(&hashes[0..rand_size]);
 
-        let now = SystemTime::now();
-        exec!(storage.insert_transactions(transactions.clone()));
-        println!(
-            "insert {:?} tx spent {:?}ms",
-            size,
-            now.elapsed().unwrap().as_millis()
-        );
+        let mut transaction = mock_signed_tx(tx_hash.clone());
+        adapter
+            .db
+            .put_cf(column, real_key, exec!(transaction.encode()).to_vec()).unwrap();
     }
 
-    let now_head = SystemTime::now();
-    let r = exec!(storage.get_transactions(head_5000_hashes.to_vec()));
-    println!(
-        "get head {:?} tx spent {:?}ms", r.len(),
-        now_head.elapsed().unwrap().as_millis()
-    );
-
-    let column = adapter.db.cf_handle("c2").unwrap();
     let mut iter = adapter.db.raw_iterator_cf(column).unwrap();
-    let mut collect= vec![];
+    let mut collect = vec![];
     let now_scan = SystemTime::now();
-
-    iter.seek(b"b");
+    iter.seek(vec![97, 0, 0, 0, 0]);
     while iter.valid() {
-        collect.push(iter.key());
+        let k = iter.key().unwrap();
+        if k[4] != 0 {
+            break
+        }
+        collect.push(k);
         iter.next();
     }
     println!(
-        "scan {:?} tx spent {:?}ms", collect.len(),
+        "scan {:?} tx spent {:?}ms",
+        collect.len(),
         now_scan.elapsed().unwrap().as_millis()
     );
 
+    // let storage = Arc::new(ImplStorage::new(Arc::clone(&adapter)));
+
+    // let loop_num = 10;
+    // let size = 1_000_000;
+    // let rand_size = 500; // 500 * 10 = 5000
+
+    // let mut head_5000_hashes = Vec::new();
+    // let mut tail_5000_hashes = Vec::new();
+    // let mut rand_5000_hashes = Vec::new();
+
+    // for i in 0..loop_num {
+    //     let mut transactions = Vec::new();
+    //     let mut hashes = Vec::new();
+
+    //     for _ in 0..size {
+    //         let tx_hash = Hash::digest(get_random_bytes(10));
+    //         hashes.push(tx_hash.clone());
+    //         let transaction = mock_signed_tx(tx_hash.clone());
+    //         transactions.push(transaction);
+    //     }
+    //     if i == 0 {
+    //         head_5000_hashes = hashes[0..5000].to_vec();
+    //     }
+    //     if i == loop_num - 1 {
+    //         tail_5000_hashes = hashes[size - 5000..size].to_vec();
+    //     }
+    //     rand_5000_hashes.extend_from_slice(&hashes[0..rand_size]);
+
+    //     let now = SystemTime::now();
+    //     exec!(storage.insert_transactions(transactions.clone()));
+    //     println!(
+    //         "insert {:?} tx spent {:?}ms",
+    //         size,
+    //         now.elapsed().unwrap().as_millis()
+    //     );
+    // }
+
+    // let now_head = SystemTime::now();
+    // let r = exec!(storage.get_transactions(head_5000_hashes.to_vec()));
+    // println!(
+    //     "get head {:?} tx spent {:?}ms", r.len(),
+    //     now_head.elapsed().unwrap().as_millis()
+    // );
+
     // let column = adapter.db.cf_handle("c2").unwrap();
-    // let iter = adapter.db.iterator_cf(column, rocksdb::IteratorMode::From(b"aaaa", rocksdb::Direction::Forward) ).unwrap();
+    // let mut iter = adapter.db.raw_iterator_cf(column).unwrap();
     // let mut collect= vec![];
+    // let now_scan = SystemTime::now();
+
+    // iter.seek(b"b");
+    // while iter.valid() {
+    //     collect.push(iter.key());
+    //     iter.next();
+    // }
+    // println!(
+    //     "scan {:?} tx spent {:?}ms", collect.len(),
+    //     now_scan.elapsed().unwrap().as_millis()
+    // );
+
+    // let column = adapter.db.cf_handle("c2").unwrap();
+    // let iter = adapter.db.iterator_cf(column,
+    // rocksdb::IteratorMode::From(b"aaaa", rocksdb::Direction::Forward)
+    // ).unwrap(); let mut collect= vec![];
     // let now_scan = SystemTime::now();
     // for (key, value) in iter {
     //     collect.push(key);
