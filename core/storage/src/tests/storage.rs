@@ -12,6 +12,7 @@ use crate::adapter::memory::MemoryAdapter;
 use crate::adapter::rocks::{Config, RocksAdapter};
 use crate::tests::{get_random_bytes, mock_block, mock_proof, mock_receipt, mock_signed_tx};
 use crate::ImplStorage;
+use rocksdb::{BlockBasedOptions, ColumnFamily, Options, WriteBatch, DB};
 
 #[test]
 fn test_storage_block_insert() {
@@ -113,31 +114,41 @@ fn test_storage_stat() {
         RocksAdapter::new("rocksdb/test_adapter_stat".to_string(), Config::default()).unwrap(),
     );
     let column = adapter.db.cf_handle("c2").unwrap();
-    for i in 0..100000 {
-        let height = i / 12000;
-        let block_index = i % 12000;
 
-        let mut buf = [0; 4];
-        let mut real_key: Vec<u8> = Vec::new();
-        real_key.push(97);
-        BigEndian::write_u32(&mut buf, height);
-        for i in 0..4 {
-            real_key.push(buf[i]);
-        }
-        BigEndian::write_u32(&mut buf, block_index);
-        for i in 0..4 {
-            real_key.push(buf[i]);
-        }
-        let tx_hash = Hash::digest(get_random_bytes(10));
-        let k: &[u8] = &tx_hash.as_bytes()[..];
-        for i in 0..k.len() {
-            real_key.push(k[i]);
+    let loop_num = 357913;
+    let size = 12000;
+
+    for height in 0..loop_num {
+        println!("{:?}", height);
+
+        let mut batch = WriteBatch::default();
+
+        for block_index in 0..size {
+
+            let mut buf = [0; 4];
+            let mut real_key: Vec<u8> = Vec::new();
+            real_key.push(97);
+            BigEndian::write_u32(&mut buf, height);
+            for i in 0..4 {
+                real_key.push(buf[i]);
+            }
+            BigEndian::write_u32(&mut buf, block_index);
+            for i in 0..4 {
+                real_key.push(buf[i]);
+            }
+            let tx_hash = Hash::digest(get_random_bytes(10));
+            let k: &[u8] = &tx_hash.as_bytes()[..];
+            for i in 0..k.len() {
+                real_key.push(k[i]);
+            }
+
+            let mut transaction = mock_signed_tx(tx_hash.clone());
+
+            batch.put_cf(column, real_key, exec!(transaction.encode()).to_vec()).unwrap();
         }
 
-        let mut transaction = mock_signed_tx(tx_hash.clone());
-        adapter
-            .db
-            .put_cf(column, real_key, exec!(transaction.encode()).to_vec()).unwrap();
+        adapter.db.write(batch).unwrap();
+
     }
 
     let mut iter = adapter.db.raw_iterator_cf(column).unwrap();
